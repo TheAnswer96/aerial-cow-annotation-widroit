@@ -139,6 +139,21 @@ Images are **not included** (proprietary drone footage). The pipeline expects an
 
 ---
 
+## Citation
+
+If you use this work, please cite:
+
+```bibtex
+@inproceedings{palazzetti2026drones,
+  title     = {From Drones to Labels: A Semi-Automated Pipeline for Efficient Livestock Segmentation Annotation},
+  author    = {Palazzetti, Lorenzo and Chen, Kuan-Ling and Casella, Enrico},
+  booktitle = {2026 22nd International Conference on Distributed Computing in Smart Systems and the Internet of Things (DCOSS-IoT)},
+  year      = {2026},
+}
+```
+
+---
+
 ## License
 
 MIT
