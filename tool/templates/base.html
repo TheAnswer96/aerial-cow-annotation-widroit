@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}WiDroIt Cow Labeler{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <span class="logo">WiDroIt · Cow Segmentation</span>
+      <nav class="steps-nav">
+        <a href="{{ url_for('step1') }}" class="step-link {% if active_step == 1 %}active{% endif %}">
+          <span class="step-num">1</span> Upload
+        </a>
+        <span class="step-sep">›</span>
+        <a href="{{ url_for('step2') }}" class="step-link {% if active_step == 2 %}active{% endif %}">
+          <span class="step-num">2</span> Annotate
+        </a>
+        <span class="step-sep">›</span>
+        <a href="{{ url_for('step3') }}" class="step-link {% if active_step == 3 %}active{% endif %}">
+          <span class="step-num">3</span> Train
+        </a>
+        <span class="step-sep">›</span>
+        <a href="{{ url_for('step4') }}" class="step-link {% if active_step == 4 %}active{% endif %}">
+          <span class="step-num">4</span> Predict
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{{ url_for('static', filename='main.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

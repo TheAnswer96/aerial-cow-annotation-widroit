@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pth
+*.onnx
+
+# Data & results (too large for git)
+1k/
+raw/
+sam/
+sam_tp/
+results/
+efficient_results/
+micro_cow_results/
+nano_cow_results/
+pico_cow_results/
+sam_comparison/
+quality_analysis/
+tool/workspace/
+
+# Uploads & archives
+*.zip
+*.tar.gz
+
+# Misc
+.env
+*.pdf
+.DS_Store
+Thumbs.db

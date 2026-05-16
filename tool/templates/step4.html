@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% set active_step = 4 %}
+{% block title %}Step 4 — Predict &amp; Review{% endblock %}
+
+{% block content %}
+<div class="page-card wide">
+  <h1>Step 4 — PicoCowUNet Inference &amp; Review</h1>
+
+  {% if request.args.get('saved') %}
+  <div class="success-box">
+    Results saved to <code>workspace/{{ session.get('sid','?') }}/final/</code>
+  </div>
+  {% endif %}
+
+  {% if not state.inference_done %}
+  <!-- ── Run inference ───────────────────────────────────────────── -->
+  <p class="subtitle">
+    Running inference on <strong>{{ state.remaining_files|length }}</strong> unannotated images
+    using the trained PicoCowUNet.
+  </p>
+
+  <div class="action-panel">
+    <button class="btn-primary" id="predict-btn" onclick="startPredict()">
+      ▶ Run Inference
+    </button>
+  </div>
+
+  <div id="progress-panel" style="display:none">
+    <div class="progress-header">
+      <span id="progress-msg">Loading model…</span>
+      <span id="progress-pct">0%</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <p class="progress-text" id="progress-text">Starting…</p>
+  </div>
+
+  {% else %}
+  <!-- ── Review Gallery ─────────────────────────────────────────── -->
+  <div class="review-header">
+    <div class="stat-bar">
+      <span class="stat accepted">✓ <strong id="cnt-accepted">{{ counts.accepted }}</strong> accepted</span>
+      <span class="stat rejected">✗ <strong id="cnt-rejected">{{ counts.rejected }}</strong> rejected</span>
+      <span class="stat pending">◌ <strong id="cnt-pending">{{ counts.pending }}</strong> pending</span>
+    </div>
+    <form action="{{ url_for('step4_save') }}" method="POST" style="display:inline">
+      <button type="submit" class="btn-primary">Save Accepted Results</button>
+    </form>
+  </div>
+
+  <div class="gallery-grid" id="gallery">
+    {% for fname in page_files %}
+    {% set status = state.prediction_review.get(fname, 'pending') %}
+    <div class="card {{ status }}" data-fname="{{ fname }}">
+      <div class="card-img-wrap">
+        <img src="{{ url_for('overlay_pred', sid=sid, filename=fname) }}"
+             loading="lazy" alt="{{ fname }}">
+      </div>
+      <div class="card-footer">
+        <span class="card-name" title="{{ fname }}">{{ fname[:22] }}{% if fname|length > 22 %}…{% endif %}</span>
+        <span class="badge badge-{{ status }}">{{ status }}</span>
+      </div>
+      <div class="card-btns">
+        <button class="btn-accept" onclick="review4('{{ fname }}', 'accept')">✓</button>
+        <button class="btn-reject" onclick="review4('{{ fname }}', 'reject')">✗</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Pagination -->
+  {% if total_pages > 1 %}
+  <div class="pagination">
+    {% if page > 1 %}
+    <a href="{{ url_for('step4') }}?page={{ page - 1 }}" class="page-btn">← Prev</a>
+    {% endif %}
+    <span class="page-info">Page {{ page }} / {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="{{ url_for('step4') }}?page={{ page + 1 }}" class="page-btn">Next →</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="review-actions-bottom">
+    <form action="{{ url_for('step4_save') }}" method="POST" style="display:inline">
+      <button type="submit" class="btn-primary">Save Accepted Results</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function startPredict() {
+  document.getElementById('predict-btn').disabled = true;
+  document.getElementById('predict-btn').textContent = 'Running…';
+  document.getElementById('progress-panel').style.display = 'block';
+
+  fetch('/step4/start_predict', {method: 'POST'})
+    .then(r => r.json())
+    .then(({task_id, error}) => {
+      if (error) { alert(error); return; }
+      streamProgress(task_id, {
+        fillId: 'progress-fill',
+        textId: 'progress-text',
+        pctId: 'progress-pct',
+        msgId: 'progress-msg',
+        onStep: d => {
+          document.getElementById('progress-text').textContent =
+            `Processing ${d.filename || ''} (${d.step}/${d.total})`;
+        },
+        onDone: () => {
+          fetch('/step4/mark_done', {method: 'POST'})
+            .then(() => window.location.reload());
+        }
+      });
+    });
+}
+
+function review4(fname, action) {
+  fetch('/step4/review', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({filename: fname, action: action})
+  })
+  .then(r => r.json())
+  .then(({counts}) => {
+    const card = document.querySelector(`.card[data-fname="${fname}"]`);
+    if (card) {
+      const status = action + 'ed';
+      card.classList.remove('pending', 'accepted', 'rejected');
+      card.classList.add(status);
+      const badge = card.querySelector('.badge');
+      badge.className = 'badge badge-' + status;
+      badge.textContent = status;
+    }
+    document.getElementById('cnt-accepted').textContent = counts.accepted;
+    document.getElementById('cnt-rejected').textContent = counts.rejected;
+    document.getElementById('cnt-pending').textContent = counts.pending;
+  });
+}
+</script>
+{% endblock %}

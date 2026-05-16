@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% set active_step = 1 %}
+{% block title %}Step 1 — Upload Dataset{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <h1>Step 1 — Upload Dataset &amp; Select Seed</h1>
+  <p class="subtitle">Upload a ZIP of drone cow images. A random subset will be sent to SAM2 for automatic annotation.</p>
+
+  <form id="upload-form" action="{{ url_for('step1_upload') }}" method="POST" enctype="multipart/form-data">
+
+    <div class="field-group">
+      <label for="dataset">Dataset ZIP</label>
+      <div class="file-drop" id="file-drop">
+        <input type="file" id="dataset" name="dataset" accept=".zip" required>
+        <span id="file-label">Click or drag a ZIP file here</span>
+      </div>
+    </div>
+
+    <div class="field-group">
+      <label for="seed_pct">
+        Seed size for annotation:
+        <strong id="pct-display">10%</strong>
+      </label>
+      <input type="range" id="seed_pct" name="seed_pct" min="1" max="50" value="10" step="1">
+      <div class="range-hints">
+        <span>1%</span>
+        <span id="img-count-hint"></span>
+        <span>50%</span>
+      </div>
+    </div>
+
+    <button type="submit" class="btn-primary" id="submit-btn">
+      Upload &amp; Continue →
+    </button>
+  </form>
+
+  <div id="upload-progress" style="display:none">
+    <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
+    <p class="progress-text">Uploading and extracting…</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const slider = document.getElementById('seed_pct');
+const display = document.getElementById('pct-display');
+const hint = document.getElementById('img-count-hint');
+const fileInput = document.getElementById('dataset');
+const fileLabel = document.getElementById('file-label');
+
+slider.addEventListener('input', () => {
+  display.textContent = slider.value + '%';
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) fileLabel.textContent = fileInput.files[0].name;
+});
+
+document.getElementById('upload-form').addEventListener('submit', () => {
+  document.getElementById('upload-progress').style.display = 'block';
+  document.getElementById('submit-btn').disabled = true;
+  document.getElementById('submit-btn').textContent = 'Uploading…';
+});
+</script>
+{% endblock %}

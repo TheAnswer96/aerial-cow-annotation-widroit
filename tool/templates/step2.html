@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% set active_step = 2 %}
+{% block title %}Step 2 — Annotate &amp; Review{% endblock %}
+
+{% block content %}
+<div class="page-card wide">
+  <h1>Step 2 — SAM2 Annotation &amp; Review</h1>
+
+  {% if not state.sam2_done %}
+  <!-- ── SAM2 Run Panel ─────────────────────────────────────────── -->
+  <p class="subtitle">
+    {{ state.seed_files|length }} seed images selected
+    ({{ state.seed_pct|round(1) }}% of {{ state.total_images }} total).
+    Run SAM2 to generate segmentation masks, then review each result.
+  </p>
+
+  <div class="action-panel">
+    <button class="btn-primary" id="run-sam2-btn" onclick="startSam2()">
+      ▶ Run SAM2 Annotation
+    </button>
+  </div>
+
+  <div id="progress-panel" style="display:none">
+    <div class="progress-header">
+      <span id="progress-msg">Initializing…</span>
+      <span id="progress-pct">0%</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <p class="progress-text" id="progress-text">Starting SAM2…</p>
+  </div>
+
+  {% else %}
+  <!-- ── Review Gallery ─────────────────────────────────────────── -->
+  <div class="review-header">
+    <div class="stat-bar" id="stat-bar">
+      <span class="stat accepted">✓ <strong id="cnt-accepted">{{ counts.accepted }}</strong> accepted</span>
+      <span class="stat rejected">✗ <strong id="cnt-rejected">{{ counts.rejected }}</strong> rejected</span>
+      <span class="stat pending">◌ <strong id="cnt-pending">{{ counts.pending }}</strong> pending</span>
+    </div>
+    <div class="review-actions-top">
+      <button class="btn-warn" onclick="noAdditional()">⊘ Reject all remaining</button>
+      <form action="{{ url_for('step2_save') }}" method="POST" style="display:inline">
+        <button type="submit" class="btn-primary">Save &amp; Train →</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="gallery-grid" id="gallery">
+    {% for fname in page_files %}
+    {% set status = state.review[fname] %}
+    <div class="card {{ status }}" id="card-{{ loop.index0 + (page-1)*48 }}" data-fname="{{ fname }}">
+      <div class="card-img-wrap">
+        <img src="{{ url_for('overlay_seed', sid=sid, filename=fname) }}"
+             loading="lazy" alt="{{ fname }}">
+      </div>
+      <div class="card-footer">
+        <span class="card-name" title="{{ fname }}">{{ fname[:22] }}{% if fname|length > 22 %}…{% endif %}</span>
+        <span class="badge badge-{{ status }}">{{ status }}</span>
+      </div>
+      <div class="card-btns">
+        <button class="btn-accept" onclick="review2('{{ fname }}', 'accept')">✓</button>
+        <button class="btn-reject" onclick="review2('{{ fname }}', 'reject')">✗</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Pagination -->
+  {% if total_pages > 1 %}
+  <div class="pagination">
+    {% if page > 1 %}
+    <a href="{{ url_for('step2') }}?page={{ page - 1 }}" class="page-btn">← Prev</a>
+    {% endif %}
+    <span class="page-info">Page {{ page }} / {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="{{ url_for('step2') }}?page={{ page + 1 }}" class="page-btn">Next →</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="review-actions-bottom">
+    <button class="btn-warn" onclick="noAdditional()">⊘ Reject all remaining</button>
+    <form action="{{ url_for('step2_save') }}" method="POST" style="display:inline">
+      <button type="submit" class="btn-primary">Save &amp; Train →</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function startSam2() {
+  document.getElementById('run-sam2-btn').disabled = true;
+  document.getElementById('run-sam2-btn').textContent = 'Running…';
+  document.getElementById('progress-panel').style.display = 'block';
+
+  fetch('/step2/start_sam2', {method: 'POST'})
+    .then(r => r.json())
+    .then(({task_id, error}) => {
+      if (error) { alert(error); return; }
+      streamProgress(task_id, {
+        fillId: 'progress-fill',
+        textId: 'progress-text',
+        pctId: 'progress-pct',
+        msgId: 'progress-msg',
+        onStep: d => {
+          document.getElementById('progress-text').textContent =
+            `Processing ${d.filename || ''} (${d.step}/${d.total})`;
+        },
+        onDone: () => {
+          fetch('/step2/mark_done', {method: 'POST'})
+            .then(() => window.location.reload());
+        }
+      });
+    });
+}
+
+function review2(fname, action) {
+  fetch('/step2/review', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({filename: fname, action: action})
+  })
+  .then(r => r.json())
+  .then(({counts}) => {
+    updateCard(fname, action + 'ed');
+    updateCounts2(counts);
+  });
+}
+
+function noAdditional() {
+  if (!confirm('Reject all remaining pending masks?')) return;
+  fetch('/step2/review', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'no_additional'})
+  })
+  .then(r => r.json())
+  .then(({counts}) => {
+    document.querySelectorAll('.card.pending').forEach(c => {
+      c.classList.remove('pending');
+      c.classList.add('rejected');
+      c.querySelector('.badge').className = 'badge badge-rejected';
+      c.querySelector('.badge').textContent = 'rejected';
+    });
+    updateCounts2(counts);
+  });
+}
+
+function updateCard(fname, status) {
+  const card = document.querySelector(`.card[data-fname="${fname}"]`);
+  if (!card) return;
+  card.classList.remove('pending', 'accepted', 'rejected');
+  card.classList.add(status);
+  const badge = card.querySelector('.badge');
+  badge.className = 'badge badge-' + status;
+  badge.textContent = status;
+}
+
+function updateCounts2(counts) {
+  document.getElementById('cnt-accepted').textContent = counts.accepted;
+  document.getElementById('cnt-rejected').textContent = counts.rejected;
+  document.getElementById('cnt-pending').textContent = counts.pending;
+}
+</script>
+{% endblock %}

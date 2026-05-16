@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% set active_step = 3 %}
+{% block title %}Step 3 — Train PicoCowUNet{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <h1>Step 3 — Train PicoCowUNet</h1>
+
+  {% if state.accepted_files %}
+  <p class="subtitle">
+    Training on <strong>{{ state.accepted_files|length }}</strong> accepted annotations.
+    PicoCowUNet (~14.5K params) — MCU-ready, INT8 quantizable.
+  </p>
+
+  {% if state.training_done %}
+  <!-- ── Training complete ────────────────────────────────────────── -->
+  <div class="metrics-panel">
+    <h3>Training complete</h3>
+    <div class="metrics-grid">
+      {% for k, v in state.training_metrics.items() %}
+      <div class="metric-card">
+        <span class="metric-label">{{ k.replace('_', ' ')|title }}</span>
+        <span class="metric-value">{{ v }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <a href="{{ url_for('step4') }}" class="btn-primary" style="margin-top:1.5rem;display:inline-block">
+      Continue to Inference →
+    </a>
+  </div>
+
+  {% else %}
+  <!-- ── Training controls ───────────────────────────────────────── -->
+  <div class="config-row">
+    <label for="epoch-input">Epochs:</label>
+    <input type="number" id="epoch-input" value="25" min="1" max="200" step="1">
+  </div>
+
+  <div class="action-panel">
+    <button class="btn-primary" id="train-btn" onclick="startTraining()">
+      ▶ Start Training
+    </button>
+  </div>
+
+  <div id="progress-panel" style="display:none">
+    <div class="progress-header">
+      <span id="progress-msg">Initializing…</span>
+      <span id="progress-pct">0%</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <p class="progress-text" id="progress-text">Starting…</p>
+  </div>
+
+  <div id="metrics-panel" style="display:none" class="metrics-panel">
+    <h3>Training complete</h3>
+    <div class="metrics-grid" id="metrics-grid"></div>
+    <a href="{{ url_for('step4') }}" class="btn-primary" style="margin-top:1.5rem;display:inline-block">
+      Continue to Inference →
+    </a>
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div class="warn-box">
+    No accepted annotations found.
+    <a href="{{ url_for('step2') }}">← Go back to Step 2</a> and accept at least one mask.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function startTraining() {
+  const epochs = parseInt(document.getElementById('epoch-input').value) || 25;
+  document.getElementById('train-btn').disabled = true;
+  document.getElementById('train-btn').textContent = 'Training…';
+  document.getElementById('progress-panel').style.display = 'block';
+
+  fetch('/step3/start_training', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({epochs})
+  })
+  .then(r => r.json())
+  .then(({task_id, error}) => {
+    if (error) { alert(error); return; }
+    streamProgress(task_id, {
+      fillId: 'progress-fill',
+      textId: 'progress-text',
+      pctId: 'progress-pct',
+      msgId: 'progress-msg',
+      onStep: d => {
+        if (d.epoch !== undefined) {
+          const pct = Math.round(d.epoch / d.total * 100);
+          document.getElementById('progress-fill').style.width = pct + '%';
+          document.getElementById('progress-pct').textContent = pct + '%';
+          document.getElementById('progress-text').textContent =
+            `Epoch ${d.epoch}/${d.total}  —  loss: ${d.loss}`;
+        }
+      },
+      onDone: d => {
+        if (d.error) { alert(d.error); return; }
+        fetch('/step3/save_metrics', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({metrics: d.metrics || {}})
+        });
+        const grid = document.getElementById('metrics-grid');
+        grid.innerHTML = '';
+        if (d.metrics) {
+          Object.entries(d.metrics).forEach(([k, v]) => {
+            grid.innerHTML += `<div class="metric-card">
+              <span class="metric-label">${k.replace(/_/g,' ')}</span>
+              <span class="metric-value">${v}</span>
+            </div>`;
+          });
+        }
+        document.getElementById('progress-panel').style.display = 'none';
+        document.getElementById('metrics-panel').style.display = 'block';
+      }
+    });
+  });
+}
+</script>
+{% endblock %}
