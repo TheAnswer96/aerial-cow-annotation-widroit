@@ -38,6 +38,8 @@ aerial-cow-annotations-tool/
 
 ## Tool — 4-step annotation pipeline
 
+<img width="1440" height="1080" alt="photo-collage png" src="https://github.com/user-attachments/assets/c99e0f5c-449d-40fb-ae61-429ff2046ced" />
+
 ```
 Step 1  Upload a ZIP of drone images → pick segmentor model (Pico → UNet) → set seed percentage
 Step 2  SAM2 auto-annotates the seed → review each mask (Accept / Reject / Reject all remaining)
