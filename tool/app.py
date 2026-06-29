@@ -65,7 +65,8 @@ def _counts(review: dict) -> dict:
 
 @app.route('/')
 def step1():
-    return render_template('step1.html')
+    from tasks.models import MODEL_REGISTRY, DEFAULT_MODEL
+    return render_template('step1.html', models=MODEL_REGISTRY, default_model=DEFAULT_MODEL)
 
 
 @app.route('/step1/upload', methods=['POST'])
@@ -97,6 +98,9 @@ def step1_upload():
 
     seed_pct = max(1.0, min(50.0, float(request.form.get('seed_pct', 10))))
 
+    from tasks.models import normalize_key
+    model_key = normalize_key(request.form.get('model'))
+
     img_exts = {'.jpg', '.jpeg', '.png', '.bmp'}
     all_images = sorted(p.name for p in dataset_dir.iterdir() if p.suffix.lower() in img_exts)
     if not all_images:
@@ -116,6 +120,7 @@ def step1_upload():
         'step': 2,
         'total_images': len(all_images),
         'seed_pct': seed_pct,
+        'model_key': model_key,
         'seed_files': seed_files,
         'remaining_files': remaining,
         'sam2_done': False,
@@ -233,7 +238,10 @@ def step3():
     sid = session.get('sid')
     if not sid:
         return redirect(url_for('step1'))
-    return render_template('step3.html', state=load_state(sid), sid=sid)
+    from tasks.models import MODEL_REGISTRY, normalize_key
+    state = load_state(sid)
+    state['model_key'] = normalize_key(state.get('model_key'))
+    return render_template('step3.html', state=state, sid=sid, models=MODEL_REGISTRY)
 
 
 @app.route('/step3/start_training', methods=['POST'])
@@ -248,7 +256,8 @@ def step3_start_training():
     task_id = str(uuid.uuid4())[:8]
     q = _new_queue(task_id)
     threading.Thread(target=run_training,
-                     args=(get_ws(sid), state['accepted_files'], q, epochs),
+                     args=(get_ws(sid), state['accepted_files'], q, epochs,
+                           state.get('model_key', 'pico')),
                      daemon=True).start()
     return jsonify(task_id=task_id)
 
@@ -293,13 +302,14 @@ def step4_start_predict():
         return jsonify(error='no session'), 400
     state = load_state(sid)
     ws = get_ws(sid)
-    model_path = ws / 'model' / 'pico.pth'
+    model_path = ws / 'model' / 'model.pth'
     if not model_path.exists():
         return jsonify(error='Trained model not found. Complete Step 3 first.'), 400
     task_id = str(uuid.uuid4())[:8]
     q = _new_queue(task_id)
     threading.Thread(target=run_prediction,
-                     args=(ws, state['remaining_files'], str(model_path), q),
+                     args=(ws, state['remaining_files'], str(model_path), q,
+                           state.get('model_key', 'pico')),
                      daemon=True).start()
     return jsonify(task_id=task_id)
 
@@ -415,4 +425,8 @@ def _overlay(img_path: Path, mask_path: Path) -> Response:
 
 
 if __name__ == '__main__':
-    app.run(debug=True, threaded=True, port=5000)
+    # use_reloader=False: the app writes uploads, weights and masks *inside* its
+    # own tree (workspace/, models/). The Werkzeug watchdog reloader watches that
+    # tree and restarts on every file write, dropping the in-flight request
+    # ("This site can't be reached"). debug=True still gives tracebacks.
+    app.run(debug=True, use_reloader=False, threaded=True, port=5000)

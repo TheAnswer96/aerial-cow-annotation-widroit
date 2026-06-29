@@ -18,6 +18,18 @@
     </div>
 
     <div class="field-group">
+      <label for="model">Segmentor model</label>
+      <select id="model" name="model">
+        {% for key, m in models.items() %}
+        <option value="{{ key }}" {% if key == default_model %}selected{% endif %}>
+          {{ m.label }} ({{ m.params }} params) — {{ m.target }}
+        </option>
+        {% endfor %}
+      </select>
+      <p class="field-hint">Smaller = edge/MCU deployment; larger = higher accuracy, needs more compute.</p>
+    </div>
+
+    <div class="field-group">
       <label for="seed_pct">
         Seed size for annotation:
         <strong id="pct-display">10%</strong>

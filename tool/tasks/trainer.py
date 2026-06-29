@@ -1,103 +1,24 @@
 """
-PicoCowUNet training runner (background thread).
-Architecture copied from unet14k.py — ~14.5K parameters.
+Segmentor training runner (background thread).
+Model architecture is chosen at upload time (see tasks/models.py registry) and
+passed in via model_key. Trains on GPU when available, else CPU.
 Mask convention: 0=object, 255=background.
 After ToTensor: 0.0=object, 1.0=background (consistent with original training code).
 """
 import queue
-import numpy as np
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from pathlib import Path
-from PIL import Image
 
-IMAGE_SIZE = 128
-BASE_CHANNELS = 12
+from tasks.models import IMAGE_SIZE, build_model, get_device, model_label
+
 BATCH_SIZE = 16
 LEARNING_RATE = 1e-4
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-
-# ── Model architecture (from unet14k.py) ─────────────────────────────────────
-
-class SqueezeExcitation(nn.Module):
-    def __init__(self, channels: int, reduction: int = 8):
-        super().__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc1 = nn.Linear(channels, max(1, channels // reduction))
-        self.fc2 = nn.Linear(max(1, channels // reduction), channels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, c, _, _ = x.shape
-        y = self.avg_pool(x).view(b, c)
-        y = torch.sigmoid(self.fc2(torch.relu(self.fc1(y)))).view(b, c, 1, 1)
-        return x * y
-
-
-class InvertedResidual(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, expand_ratio: int = 2):
-        super().__init__()
-        hidden = in_ch * expand_ratio
-        self.use_res = (in_ch == out_ch)
-        self.expand = nn.Sequential(
-            nn.Conv2d(in_ch, hidden, 1, bias=False),
-            nn.BatchNorm2d(hidden),
-            nn.ReLU6(inplace=True),
-        ) if expand_ratio != 1 else nn.Identity()
-        self.depthwise = nn.Sequential(
-            nn.Conv2d(hidden, hidden, 3, padding=1, groups=hidden, bias=False),
-            nn.BatchNorm2d(hidden),
-            nn.ReLU6(inplace=True),
-        )
-        self.project = nn.Sequential(
-            nn.Conv2d(hidden, out_ch, 1, bias=False),
-            nn.BatchNorm2d(out_ch),
-        )
-        self.se = SqueezeExcitation(out_ch) if out_ch >= 8 else nn.Identity()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        x = self.project(self.depthwise(self.expand(x)))
-        x = self.se(x)
-        return x + residual if self.use_res else x
-
-
-class PicoCowUNet(nn.Module):
-    def __init__(self, in_channels: int = 3, out_channels: int = 1, base_c: int = BASE_CHANNELS):
-        super().__init__()
-        self.enc1 = InvertedResidual(in_channels, base_c, 2)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.bottleneck = nn.Sequential(
-            InvertedResidual(base_c, base_c * 2, 2),
-            InvertedResidual(base_c * 2, base_c * 2, 2),
-        )
-        self.global_pool = nn.AdaptiveAvgPool2d(1)
-        self.objectness_fc = nn.Sequential(
-            nn.Linear(base_c * 2, base_c), nn.ReLU(inplace=True),
-            nn.Linear(base_c, base_c * 2),
-        )
-        self.up1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.proj_skip1 = nn.Conv2d(base_c, base_c * 2, 1, bias=False)
-        self.dec1 = InvertedResidual(base_c * 2, base_c * 2)
-        self.se1 = SqueezeExcitation(base_c * 2)
-        self.final = nn.Sequential(
-            nn.Conv2d(base_c * 2, base_c, 3, padding=1, bias=False),
-            nn.BatchNorm2d(base_c),
-            nn.ReLU6(inplace=True),
-            nn.Conv2d(base_c, out_channels, 1),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        e1 = self.enc1(x)
-        b = self.bottleneck(self.pool(e1))
-        obj = self.objectness_fc(self.global_pool(b).flatten(1)).unsqueeze(-1).unsqueeze(-1)
-        b = b + obj
-        d1 = self.up1(b) + self.proj_skip1(e1)
-        d1 = self.se1(self.dec1(d1))
-        return self.final(d1)
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -132,9 +53,19 @@ class BinarySegDataset(Dataset):
 # ── Training runner ───────────────────────────────────────────────────────────
 
 def run_training(workspace: Path, accepted_files: list[str], q: queue.Queue,
-                 num_epochs: int = 25) -> None:
+                 num_epochs: int = 25, model_key: str = 'pico') -> None:
+    try:
+        _run_training(workspace, accepted_files, q, num_epochs, model_key)
+    except Exception as exc:
+        q.put({'error': f'Training crashed: {exc}', 'done': True})
+
+
+def _run_training(workspace: Path, accepted_files: list[str], q: queue.Queue,
+                  num_epochs: int, model_key: str) -> None:
     model_dir = workspace / 'model'
     model_dir.mkdir(exist_ok=True)
+    device = get_device()
+    label = model_label(model_key)
 
     if not accepted_files:
         q.put({'error': 'No accepted images to train on.', 'done': True})
@@ -149,13 +80,14 @@ def run_training(workspace: Path, accepted_files: list[str], q: queue.Queue,
         q.put({'error': 'No accepted masks found. Check annotation step.', 'done': True})
         return
 
-    q.put({'msg': f'Training PicoCowUNet on {len(valid)} images', 'epoch': 0, 'total': num_epochs, 'pct': 0})
+    q.put({'msg': f'Training {label} on {len(valid)} images ({device.upper()})',
+           'epoch': 0, 'total': num_epochs, 'pct': 0})
 
     ds = BinarySegDataset(images_dir, masks_dir, valid)
     bs = min(BATCH_SIZE, len(ds))
     loader = DataLoader(ds, batch_size=bs, shuffle=True, num_workers=0, drop_last=False)
 
-    model = PicoCowUNet().to(DEVICE)
+    model = build_model(model_key).to(device)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.BCEWithLogitsLoss()
     best_loss = float('inf')
@@ -164,7 +96,7 @@ def run_training(workspace: Path, accepted_files: list[str], q: queue.Queue,
         model.train()
         total_loss = 0.0
         for imgs, masks in loader:
-            imgs, masks = imgs.to(DEVICE), masks.to(DEVICE)
+            imgs, masks = imgs.to(device), masks.to(device)
             optimizer.zero_grad()
             loss = criterion(model(imgs), masks)
             loss.backward()
@@ -174,7 +106,7 @@ def run_training(workspace: Path, accepted_files: list[str], q: queue.Queue,
         avg_loss = total_loss / len(loader)
         if avg_loss < best_loss:
             best_loss = avg_loss
-            torch.save(model.state_dict(), str(model_dir / 'pico.pth'))
+            torch.save(model.state_dict(), str(model_dir / 'model.pth'))
 
         q.put({
             'epoch': epoch + 1,
@@ -189,7 +121,7 @@ def run_training(workspace: Path, accepted_files: list[str], q: queue.Queue,
     eps = 1e-6
     with torch.no_grad():
         for imgs, masks in loader:
-            imgs, masks = imgs.to(DEVICE), masks.to(DEVICE)
+            imgs, masks = imgs.to(device), masks.to(device)
             preds = (torch.sigmoid(model(imgs)) > 0.5).float()
             tp += (preds * masks).sum().item()
             fp += (preds * (1 - masks)).sum().item()
@@ -203,6 +135,8 @@ def run_training(workspace: Path, accepted_files: list[str], q: queue.Queue,
     q.put({
         'done': True,
         'metrics': {
+            'model': label,
+            'device': device,
             'iou': round(iou, 4),
             'f1': round(f1, 4),
             'precision': round(precision, 4),

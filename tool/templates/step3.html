@@ -1,15 +1,16 @@
 {% extends "base.html" %}
 {% set active_step = 3 %}
-{% block title %}Step 3 — Train PicoCowUNet{% endblock %}
+{% set model = models[state.model_key] %}
+{% block title %}Step 3 — Train {{ model.label }}{% endblock %}
 
 {% block content %}
 <div class="page-card">
-  <h1>Step 3 — Train PicoCowUNet</h1>
+  <h1>Step 3 — Train {{ model.label }}</h1>
 
   {% if state.accepted_files %}
   <p class="subtitle">
     Training on <strong>{{ state.accepted_files|length }}</strong> accepted annotations.
-    PicoCowUNet (~14.5K params) — MCU-ready, INT8 quantizable.
+    {{ model.label }} ({{ model.params }} params) — target: {{ model.target }}.
   </p>
 
   {% if state.training_done %}

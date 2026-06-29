@@ -150,6 +150,22 @@ input[type="number"] {
   font-size: 0.9rem;
 }
 
+.field-group select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+.field-hint {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted, #8a8f98);
+}
+
 /* ── Buttons ──────────────────────────────────────────────────────── */
 .btn-primary {
   background: var(--accent);

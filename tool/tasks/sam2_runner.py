@@ -1,12 +1,23 @@
 """
 SAM2 annotation runner (background thread).
 Mask convention: 0 = object (cow), 255 = background.
-Falls back to Otsu thresholding if sam2 package not installed.
+
+Uses ultralytics SAM2 in "segment everything" mode. Weights live inside the
+repo at tool/models/ and auto-download on first run. Falls back to Otsu
+thresholding if ultralytics is missing or the model can't be loaded.
 """
+import os
 import queue
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 from PIL import Image
+
+# Weights are kept inside the repo so the tool is self-contained.
+MODELS_DIR = Path(__file__).resolve().parent.parent / 'models'
+# sam2_t (tiny, ~39 MB) is the CPU-friendly default; override for quality:
+#   SAM2_MODEL=sam2_b.pt  (base, ~162 MB)  /  sam2_s.pt  /  sam2_l.pt
+SAM2_MODEL = os.environ.get('SAM2_MODEL', 'sam2_t.pt')
 
 
 def run_sam2(workspace: Path, seed_files: list[str], q: queue.Queue) -> None:
@@ -16,35 +27,35 @@ def run_sam2(workspace: Path, seed_files: list[str], q: queue.Queue) -> None:
         q.put({'error': f'SAM2 runner crashed: {exc}', 'done': True})
 
 
+def _load_model(q: queue.Queue, total: int):
+    """Load ultralytics SAM2, downloading weights into tool/models/ if absent.
+
+    Returns the model, or None to signal the Otsu fallback.
+    """
+    try:
+        from ultralytics import SAM
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        weights = MODELS_DIR / SAM2_MODEL
+        # SAM(<path>) downloads the named asset to <path> when it doesn't exist.
+        model = SAM(str(weights))
+        q.put({'msg': f'SAM2 loaded ({SAM2_MODEL})', 'step': 0, 'total': total, 'pct': 0})
+        return model
+    except Exception as exc:
+        q.put({'msg': f'SAM2 unavailable ({exc}) — using Otsu fallback',
+               'step': 0, 'total': total, 'pct': 0})
+        return None
+
+
 def _run_sam2(workspace: Path, seed_files: list[str], q: queue.Queue) -> None:
     masks_dir = workspace / 'sam_masks'
     masks_dir.mkdir(exist_ok=True)
     seed_dir = workspace / 'seed'
     total = len(seed_files)
 
-    mask_generator = None
-    try:
-        import os
-        import torch
-        from sam2.build_sam import build_sam2
-        from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-        checkpoint = os.environ.get('SAM2_CHECKPOINT', '')
-        cfg = os.environ.get('SAM2_CONFIG', 'sam2_hiera_small.yaml')
-        if checkpoint and Path(checkpoint).exists():
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            sam2 = build_sam2(cfg, checkpoint, device=device)
-            mask_generator = SAM2AutomaticMaskGenerator(
-                sam2,
-                points_per_side=16,
-                pred_iou_thresh=0.80,
-                stability_score_thresh=0.85,
-                min_mask_region_area=300,
-            )
-            q.put({'msg': 'SAM2 loaded', 'step': 0, 'total': total, 'pct': 0})
-        else:
-            q.put({'msg': 'No SAM2 checkpoint — using Otsu fallback', 'step': 0, 'total': total, 'pct': 0})
-    except Exception:
-        q.put({'msg': 'SAM2 unavailable — using Otsu fallback', 'step': 0, 'total': total, 'pct': 0})
+    # Emit immediately so the UI shows life while weights download / model loads
+    # (first run fetches ~74 MB; load itself is a few seconds on CPU).
+    q.put({'msg': 'Loading SAM2 model…', 'step': 0, 'total': total, 'pct': 0})
+    model = _load_model(q, total)
 
     for i, fname in enumerate(seed_files):
         img_path = seed_dir / fname
@@ -53,14 +64,8 @@ def _run_sam2(workspace: Path, seed_files: list[str], q: queue.Queue) -> None:
             img = Image.open(img_path).convert('RGB')
             img_np = np.array(img)
 
-            if mask_generator is not None:
-                masks = mask_generator.generate(img_np)
-                if masks:
-                    best = max(masks, key=lambda m: m['area'])
-                    seg = best['segmentation'].astype(np.uint8)
-                    out = np.where(seg == 1, 0, 255).astype(np.uint8)
-                else:
-                    out = np.full(img_np.shape[:2], 255, np.uint8)
+            if model is not None:
+                out = _sam2_mask(model, img_np)
             else:
                 out = _otsu_mask(img_np)
 
@@ -76,6 +81,28 @@ def _run_sam2(workspace: Path, seed_files: list[str], q: queue.Queue) -> None:
                'pct': int((i + 1) / total * 100)})
 
     q.put({'done': True, 'total': total})
+
+
+def _sam2_mask(model, img_np: np.ndarray) -> np.ndarray:
+    """Prompt SAM2 with a centered foreground point and take that mask as the cow.
+
+    A single point prompt is one forward pass (~sub-second on CPU), versus
+    segment-everything which runs a dense point grid (~8 s/image on CPU and
+    tends to return the background as its largest mask). Drone crops frame the
+    cow roughly centrally, and every mask is human-reviewed afterwards.
+
+    Output convention: 0 = object, 255 = background.
+    """
+    h, w = img_np.shape[:2]
+    res = model(img_np, points=[[w // 2, h // 2]], labels=[1], verbose=False)
+    masks = res[0].masks if res else None
+    if masks is None or len(masks.data) == 0:
+        return np.full((h, w), 255, np.uint8)
+    data = masks.data.cpu().numpy()  # (N, H, W) at original resolution
+    # Point prompt usually yields one mask; if several, take the largest.
+    areas = data.reshape(data.shape[0], -1).sum(axis=1)
+    seg = data[int(areas.argmax())]
+    return np.where(seg > 0.5, 0, 255).astype(np.uint8)
 
 
 def _otsu_mask(img_np: np.ndarray) -> np.ndarray:

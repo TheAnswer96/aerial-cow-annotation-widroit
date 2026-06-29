@@ -39,9 +39,9 @@ aerial-cow-annotations-tool/
 ## Tool — 4-step annotation pipeline
 
 ```
-Step 1  Upload a ZIP of drone images → set seed percentage
+Step 1  Upload a ZIP of drone images → pick segmentor model (Pico → UNet) → set seed percentage
 Step 2  SAM2 auto-annotates the seed → review each mask (Accept / Reject / Reject all remaining)
-Step 3  Train PicoCowUNet on accepted masks → live loss curve
+Step 3  Train the chosen model on accepted masks → live loss curve  (GPU if available)
 Step 4  Run trained model on remaining images → review predictions → export
 ```
 
@@ -53,14 +53,16 @@ pip install -r requirements.txt
 python app.py          # → http://localhost:5000
 ```
 
-**SAM2 (optional).** Without weights the pipeline uses Otsu thresholding as fallback — still reviewable.
-To enable real SAM2:
+**SAM2.** Bundled via `ultralytics` (in `requirements.txt`). On the first SAM2 run the
+weights auto-download into `tool/models/` (default `sam2_t.pt`, ~74 MB) — no manual setup.
+Pick a larger model for quality:
 
 ```bash
-pip install git+https://github.com/facebookresearch/segment-anything-2.git
-export SAM2_CHECKPOINT=/path/to/sam2_hiera_small.pt
-export SAM2_CONFIG=sam2_hiera_small.yaml
+export SAM2_MODEL=sam2_b.pt   # or sam2_s.pt / sam2_l.pt
 ```
+
+If `ultralytics` is missing or the model can't load, the pipeline falls back to Otsu
+thresholding — still reviewable.
 
 Session workspaces are stored under `tool/workspace/{id}/` and are fully self-contained.
 

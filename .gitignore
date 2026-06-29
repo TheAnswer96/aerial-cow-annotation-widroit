@@ -2,7 +2,11 @@
 __pycache__/
 *.py[cod]
 *.pth
+*.pt
 *.onnx
+
+# Model weights (auto-downloaded)
+tool/models/
 
 # Data & results (too large for git)
 1k/
@@ -27,3 +31,4 @@ tool/workspace/
 *.pdf
 .DS_Store
 Thumbs.db
+*.md
